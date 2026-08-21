@@ -1,8 +1,13 @@
 #!/bin/bash
+
+# Narzędzia wołamy z katalogu, w którym leży ten skrypt - działa zarówno
+# po instalacji w /bin, jak i uruchomione wprost z repozytorium.
+TOOLS_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
 docker pull n8nio/n8n:latest
-docker rm -f n8n
+
 if [ -f /root/.n8n/database.sqlite ]; then
-    n8n_install
+    "${TOOLS_DIR}/n8n_install"
 else
-    n8n_install_postgres
+    "${TOOLS_DIR}/n8n_install_postgres"
 fi

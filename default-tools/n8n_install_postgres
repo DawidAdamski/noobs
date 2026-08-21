@@ -28,7 +28,28 @@ if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
     saved_port="$PORT"
     saved_domain="$DOMAIN"
+    saved_memory="${MEMORY_LIMIT:-}"
+    saved_heap="${NODE_HEAP:-}"
+    saved_binary="${BINARY_DATA_MODE:-}"
 fi
+
+# Twardy limit pamięci kontenera w MB.
+# Puste = cała maszyna minus 100MB (zachowanie domyślne).
+# Jeśli dzielisz serwer z innymi usługami, ustaw MEMORY_LIMIT w pliku
+# konfiguracyjnym - inaczej n8n i sąsiedzi wzajemnie się wypychają.
+memoryLimit="${saved_memory:-}"
+
+# Sufit sterty V8 w MB (--max-old-space-size).
+# Puste = cała maszyna minus 200MB (zachowanie domyślne).
+# Node powiększa stertę leniwie aż do sufitu i niechętnie oddaje pamięć,
+# więc wysoki sufit sam z siebie powoduje pełzanie zużycia w górę.
+nodeHeap="${saved_heap:-}"
+
+# Tryb przechowywania danych binarnych.
+# Domyślny tryb n8n ("default") trzyma załączniki i pliki w pamięci RAM,
+# co na małej maszynie jest kosztowne. "filesystem" odkłada je na dysk
+# w zamontowanym wolumenie. Wyłącz ustawiając BINARY_DATA_MODE=default.
+binaryMode="${saved_binary:-filesystem}"
 
 # alternatywny numer portu
 if [ -n "$1" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -66,9 +87,6 @@ else
     echo -e " ${GREEN}> Katalog dla PostgreSQL już istnieje - użyję go${NORMAL}"
 fi
 
-echo -e " ${GREEN}> Uruchamiam kontener...${NORMAL}"
-
-
 # wsparcie dla alternatywnej domeny do webhooków
 if [ -n "$2" ] && [[ "$2" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
     domain="$2"
@@ -87,16 +105,30 @@ echo -e " ${GREEN}> Zapisuję konfigurację do pliku${NORMAL}"
 cat > "$CONFIG_FILE" << EOF
 PORT=${portNR}
 DOMAIN=${domain}
+MEMORY_LIMIT=${memoryLimit}
+NODE_HEAP=${nodeHeap}
+BINARY_DATA_MODE=${binaryMode}
 EOF
 
-# porządki
-docker rm -f n8n >/dev/null 2>&1
-docker rm -f pg_n8n >/dev/null 2>&1
-docker rm -f watchtower_n8n >/dev/null 2>&1
+# Obrazy pobieramy ZANIM cokolwiek zatrzymamy - stara instancja pracuje
+# przez cały czas pobierania, więc przestój to sekundy zamiast minut
+# potrzebnych na ściągnięcie kilkuset megabajtów.
 docker pull n8nio/n8n:latest
-#docker pull postgres:13
 docker pull pgvector/pgvector:pg15
 docker pull nickfedor/watchtower
+
+# Porządki. Najpierw grzeczne zatrzymanie - "docker rm -f" wysyła SIGKILL,
+# a dla Postgresa oznacza to nieczyste zamknięcie i długie odzyskiwanie
+# przy następnym starcie (fsync całego katalogu danych plus odtwarzanie WAL).
+echo -e " ${GREEN}> Zatrzymuję istniejące kontenery${NORMAL}"
+docker stop -t 60 n8n >/dev/null 2>&1
+docker rm -f n8n >/dev/null 2>&1
+docker stop -t 120 pg_n8n >/dev/null 2>&1
+docker rm -f pg_n8n >/dev/null 2>&1
+docker rm -f watchtower_n8n >/dev/null 2>&1
+
+echo -e " ${GREEN}> Uruchamiam kontener...${NORMAL}"
+
 
 #uruchamiamy DB
 docker run -itd \
@@ -115,10 +147,30 @@ done
 
 docker exec -it pg_n8n psql -U n8n -c "create extension if not exists vector;"
 
+# budujemy parametry uruchomienia n8n
+if [ -n "${memoryLimit}" ]; then
+    echo -e " ${GREEN}> Limit pamięci kontenera: ${memoryLimit}MB${NORMAL}"
+    containerMemory="${memoryLimit}"
+else
+    containerMemory=$[$availableMemory-100]
+    echo -e " ${YELLOW}> Limit pamięci kontenera: ${containerMemory}MB (cała maszyna)${NORMAL}"
+    echo -e " ${YELLOW}  Dzielisz serwer z innymi usługami? Ustaw MEMORY_LIMIT w ${CONFIG_FILE}${NORMAL}"
+fi
+
+if [ -n "${nodeHeap}" ]; then
+    echo -e " ${GREEN}> Sufit sterty Node: ${nodeHeap}MB${NORMAL}"
+else
+    nodeHeap=$[$availableMemory-200]
+    echo -e " ${YELLOW}> Sufit sterty Node: ${nodeHeap}MB (cała maszyna)${NORMAL}"
+    echo -e " ${YELLOW}  Zużycie n8n będzie rosło aż do tej wartości. Ustaw NODE_HEAP w ${CONFIG_FILE}${NORMAL}"
+fi
+
+echo -e " ${GREEN}> Tryb danych binarnych: ${binaryMode}${NORMAL}"
+
 # uruchamiamy n8n
 docker run -itd \
-  --memory=$[$availableMemory-100]m \
-  --memory-swap=$[$availableMemory-100]m \
+  --memory=${containerMemory}m \
+  --memory-swap=${containerMemory}m \
   --memory-swappiness=0 \
   --name n8n \
   -p ${portNR}:5678 \
@@ -138,7 +190,8 @@ docker run -itd \
   -e EXECUTIONS_DATA_PRUNE=true \
   -e EXECUTIONS_DATA_MAX_AGE=336 \
   -e EXECUTIONS_DATA_PRUNE_MAX_COUNT=2000 \
-  -e NODE_OPTIONS=--max-old-space-size=$[$availableMemory-200] \
+  -e N8N_DEFAULT_BINARY_DATA_MODE=${binaryMode} \
+  -e NODE_OPTIONS=--max-old-space-size=${nodeHeap} \
   -e GENERIC_TIMEZONE="Europe/Warsaw" \
   -e WEBHOOK_URL=https://${domain} \
   --link pg_n8n:db \
@@ -169,7 +222,7 @@ done
 echo -e "\n\n"
 
 # aktywujemy backup dla usera
-/bin/n8n_backup
+"$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/n8n_backup"
 
 echo -e "\n\n${GREEN}Twoja instancja N8N jest pod adresem:${NORMAL}\n"
 echo -e "https://${domain}\n\n"
