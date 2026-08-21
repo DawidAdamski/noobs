@@ -101,7 +101,10 @@ rm -f "${tmpPath}"
 if docker ps --format '{{.Names}}' | grep -q '^baserow$'; then
     wasRunning=1
     print_action "Zatrzymuję kontener baserow na czas backupu"
-    docker stop baserow >/dev/null
+    # -t 120: domyślne 10s to za mało. Wbudowany Postgres przy zamykaniu
+    # dokańcza fsync katalogu danych, co na wolnym dysku trwa minuty.
+    # Po upływie timeoutu docker wysyła SIGKILL i baza wstaje w recovery.
+    docker stop -t 120 baserow >/dev/null
 fi
 
 print_action "Tworzę archiwum ${archivePath}"
