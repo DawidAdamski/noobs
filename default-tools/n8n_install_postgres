@@ -48,8 +48,9 @@ nodeHeap="${saved_heap:-}"
 # Tryb przechowywania danych binarnych.
 # Domyślny tryb n8n ("default") trzyma załączniki i pliki w pamięci RAM,
 # co na małej maszynie jest kosztowne. "filesystem" odkłada je na dysk
-# w zamontowanym wolumenie. Wyłącz ustawiając BINARY_DATA_MODE=default.
-binaryMode="${saved_binary:-filesystem}"
+# w zamontowanym wolumenie. Zachowujemy domyślne zachowanie n8n - tryb
+# dyskowy włącz ustawiając BINARY_DATA_MODE=filesystem w konfiguracji.
+binaryMode="${saved_binary:-default}"
 
 # alternatywny numer portu
 if [ -n "$1" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -165,7 +166,12 @@ else
     echo -e " ${YELLOW}  Zużycie n8n będzie rosło aż do tej wartości. Ustaw NODE_HEAP w ${CONFIG_FILE}${NORMAL}"
 fi
 
-echo -e " ${GREEN}> Tryb danych binarnych: ${binaryMode}${NORMAL}"
+if [ "${binaryMode}" = "default" ]; then
+    echo -e " ${YELLOW}> Tryb danych binarnych: default (pliki trzymane w pamięci)${NORMAL}"
+    echo -e " ${YELLOW}  Przy małej ilości RAM ustaw BINARY_DATA_MODE=filesystem w ${CONFIG_FILE}${NORMAL}"
+else
+    echo -e " ${GREEN}> Tryb danych binarnych: ${binaryMode}${NORMAL}"
+fi
 
 # uruchamiamy n8n
 docker run -itd \
