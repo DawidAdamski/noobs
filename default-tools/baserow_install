@@ -180,7 +180,10 @@ fi
 
 echo -e " ${GREEN}> Uruchamiam kontener...${NORMAL}"
 
-# porządki
+# Porządki. Najpierw grzeczne zatrzymanie - "docker rm -f" wysyła SIGKILL,
+# co dla wbudowanego Postgresa oznacza nieczyste zamknięcie i odzyskiwanie
+# z WAL-i przy następnym starcie. Dane przeżyją, ale start trwa dłużej.
+docker stop -t 120 baserow >/dev/null 2>&1
 docker rm -f baserow >/dev/null 2>&1
 
 docker run "${runArgs[@]}" "${baserowImageRef}"
