@@ -31,6 +31,7 @@ if [ -f "$CONFIG_FILE" ]; then
     saved_memory="${MEMORY_LIMIT:-}"
     saved_heap="${NODE_HEAP:-}"
     saved_binary="${BINARY_DATA_MODE:-}"
+    saved_binary_path="${BINARY_DATA_PATH:-}"
 fi
 
 # Twardy limit pamięci kontenera w MB.
@@ -51,6 +52,13 @@ nodeHeap="${saved_heap:-}"
 # w zamontowanym wolumenie. Zachowujemy domyślne zachowanie n8n - tryb
 # dyskowy włącz ustawiając BINARY_DATA_MODE=filesystem w konfiguracji.
 binaryMode="${saved_binary:-default}"
+
+# Katalog na dane binarne, montowany do kontenera.
+# Puste = katalog domowy n8n, czyli dysk systemowy. Tryb "filesystem"
+# odklada tam kazdy zalacznik osobnym plikiem - jeden przelot przez
+# skrzynke pocztowa potrafi zostawic kilkaset tysiecy plikow i zapchac
+# maszyne. Na Mikrusie wlasciwym miejscem jest /storage.
+binaryPath="${saved_binary_path:-}"
 
 # alternatywny numer portu
 if [ -n "$1" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -109,6 +117,7 @@ DOMAIN=${domain}
 MEMORY_LIMIT=${memoryLimit}
 NODE_HEAP=${nodeHeap}
 BINARY_DATA_MODE=${binaryMode}
+BINARY_DATA_PATH=${binaryPath}
 EOF
 
 # Obrazy pobieramy ZANIM cokolwiek zatrzymamy - stara instancja pracuje
@@ -173,6 +182,25 @@ else
     echo -e " ${GREEN}> Tryb danych binarnych: ${binaryMode}${NORMAL}"
 fi
 
+# Dane binarne poza katalogiem domowym montujemy pod obiema nazwami.
+# n8n v3 przemianowuje "binaryData" na "storage" - bez drugiego mounta
+# aktualizacja po cichu wrocilaby do zapisu na dysku systemowym.
+binaryArgs=()
+if [ -n "${binaryPath}" ]; then
+    echo -e " ${GREEN}> Dane binarne: ${binaryPath}${NORMAL}"
+    mkdir -p "${binaryPath}"
+    chown -R 1000:root "${binaryPath}"
+    binaryArgs=(
+        -v "${binaryPath}":/home/node/.n8n/binaryData
+        -v "${binaryPath}":/home/node/.n8n/storage
+    )
+elif [ "${binaryMode}" != "default" ]; then
+    echo -e " ${YELLOW}> BINARY_DATA_PATH nie ustawione - zalaczniki ida na dysk systemowy${NORMAL}"
+    if [ -d /storage ]; then
+        echo -e " ${YELLOW}  Masz /storage - rozwaz BINARY_DATA_PATH=/storage/n8n-binary${NORMAL}"
+    fi
+fi
+
 # uruchamiamy n8n
 docker run -itd \
   --memory=${containerMemory}m \
@@ -201,6 +229,7 @@ docker run -itd \
   -e GENERIC_TIMEZONE="Europe/Warsaw" \
   -e WEBHOOK_URL=https://${domain} \
   --link pg_n8n:db \
+  "${binaryArgs[@]}" \
   n8nio/n8n:latest
 
 docker run -d \
